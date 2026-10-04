@@ -66,13 +66,11 @@ jobs:
           Write-Host "RDP enabled."
 
       # ==========================================
-      # 4. CREATE WINDOWS USER + PASSWORD
+      # 4. CREATE WINDOWS USER
       # ==========================================
       - name: Create User Account
         shell: powershell
         run: |
-
-          Write-Host "Creating PCGamer account..."
 
           $upper   = "ABCDEFGHJKLMNPQRSTUVWXYZ"
           $lower   = "abcdefghijkmnopqrstuvwxyz"
@@ -159,8 +157,6 @@ jobs:
             -OutFile $msi `
             -UseBasicParsing
 
-          Write-Host "Installing Tailscale..."
-
           $process = Start-Process `
             -FilePath "msiexec.exe" `
             -ArgumentList "/i `"$msi`" /qn /norestart" `
@@ -194,8 +190,6 @@ jobs:
               Write-Error "Tailscale executable not found."
               exit 1
           }
-
-          Write-Host "Connecting Tailscale..."
 
           & $tailscale up `
             --auth-key="$env:TS_AUTHKEY" `
@@ -247,7 +241,7 @@ jobs:
 
           $msi = "$env:TEMP\Sunshine.msi"
 
-          Write-Host "Downloading Sunshine v$version..."
+          Write-Host "Downloading Sunshine..."
 
           Invoke-WebRequest `
             -Uri $url `
@@ -263,106 +257,14 @@ jobs:
             -PassThru
 
           if ($process.ExitCode -ne 0) {
-              Write-Error "Sunshine installation failed. Exit code: $($process.ExitCode)"
+              Write-Error "Sunshine installation failed."
               exit 1
           }
 
-          Write-Host "Sunshine installed."
+          Write-Host "Sunshine installed successfully."
 
       # ==========================================
-      # 9. CONFIGURE SUNSHINE
-      # ==========================================
-      - name: Configure Sunshine
-        shell: powershell
-        run: |
-
-          $sunshine = "C:\Program Files\Sunshine\sunshine.exe"
-
-          $configDir = "C:\Program Files\Sunshine\config"
-
-          $configFile = "$configDir\sunshine.conf"
-
-          if (-not (Test-Path $sunshine)) {
-              Write-Error "Sunshine executable was not found."
-              exit 1
-          }
-
-          New-Item `
-            -ItemType Directory `
-            -Path $configDir `
-            -Force | Out-Null
-
-          Write-Host "Preparing Sunshine configuration..."
-
-          if (-not (Test-Path $configFile)) {
-              New-Item `
-                -ItemType File `
-                -Path $configFile `
-                -Force | Out-Null
-          }
-
-          $config = Get-Content `
-            -Path $configFile `
-            -Raw `
-            -ErrorAction SilentlyContinue
-
-          if ($null -eq $config) {
-              $config = ""
-          }
-
-          function Set-SunshineOption {
-              param(
-                  [string]$Name,
-                  [string]$Value
-              )
-
-              $current = Get-Content `
-                -Path $configFile `
-                -Raw `
-                -ErrorAction SilentlyContinue
-
-              if ($current -match "(?m)^\s*$([regex]::Escape($Name))\s*=") {
-
-                  $current = [regex]::Replace(
-                    $current,
-                    "(?m)^\s*$([regex]::Escape($Name))\s*=.*$",
-                    "$Name = $Value"
-                  )
-
-              } else {
-
-                  if (-not $current.EndsWith("`n")) {
-                      $current += "`r`n"
-                  }
-
-                  $current += "$Name = $Value`r`n"
-              }
-
-              Set-Content `
-                -Path $configFile `
-                -Value $current `
-                -Encoding UTF8
-          }
-
-          # Allow the Web UI through the Tailscale-only firewall.
-          Set-SunshineOption `
-            -Name "origin_web_ui_allowed" `
-            -Value "wan"
-
-          # Allow Moonlight pairing through Tailscale.
-          Set-SunshineOption `
-            -Name "origin_pin_allowed" `
-            -Value "wan"
-
-          # Do not open ports automatically on the router.
-          Set-SunshineOption `
-            -Name "upnp" `
-            -Value "disabled"
-
-          Write-Host "Sunshine configuration prepared."
-
-      # ==========================================
-      # 10. GENERATE SUNSHINE PASSWORD
+      # 9. GENERATE SUNSHINE PASSWORD
       # ==========================================
       - name: Generate Sunshine Password
         shell: powershell
@@ -408,31 +310,20 @@ jobs:
           Write-Host "Sunshine password generated."
 
       # ==========================================
-      # 11. SET SUNSHINE CREDENTIALS
+      # 10. CONFIGURE SUNSHINE CREDENTIALS
       # ==========================================
-      - name: Set Sunshine Credentials
+      - name: Configure Sunshine Credentials
         shell: powershell
         run: |
 
           $sunshine = "C:\Program Files\Sunshine\sunshine.exe"
 
-          $service = Get-Service `
-            -Name "SunshineService" `
-            -ErrorAction SilentlyContinue
-
-          if ($service) {
-
-              Write-Host "Stopping Sunshine service..."
-
-              Stop-Service `
-                -Name "SunshineService" `
-                -Force `
-                -ErrorAction SilentlyContinue
-
-              Start-Sleep -Seconds 3
+          if (-not (Test-Path $sunshine)) {
+              Write-Error "Sunshine executable not found."
+              exit 1
           }
 
-          Write-Host "Setting Sunshine Web UI credentials..."
+          Write-Host "Creating Sunshine credentials..."
 
           & $sunshine `
             --creds `
@@ -440,14 +331,14 @@ jobs:
             "$env:SUNSHINE_PASSWORD"
 
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "Failed to set Sunshine credentials."
+              Write-Error "Could not create Sunshine credentials."
               exit 1
           }
 
-          Write-Host "Sunshine credentials configured."
+          Write-Host "Sunshine credentials created."
 
       # ==========================================
-      # 12. START SUNSHINE
+      # 11. START SUNSHINE
       # ==========================================
       - name: Start Sunshine
         shell: powershell
@@ -468,22 +359,22 @@ jobs:
               Start-Service `
                 -Name "SunshineService"
 
-              Start-Sleep -Seconds 10
+              Write-Host "Sunshine service started."
 
           } else {
 
               Write-Host "Sunshine service not found."
+              Write-Host "Starting Sunshine directly..."
 
               Start-Process `
-                "C:\Program Files\Sunshine\sunshine.exe"
+                -FilePath "C:\Program Files\Sunshine\sunshine.exe"
 
-              Start-Sleep -Seconds 10
           }
 
-          Write-Host "Sunshine started."
+          Start-Sleep -Seconds 10
 
       # ==========================================
-      # 13. SUNSHINE FIREWALL
+      # 12. SUNSHINE FIREWALL
       # ==========================================
       - name: Configure Sunshine Firewall
         shell: powershell
@@ -491,7 +382,6 @@ jobs:
 
           Write-Host "Configuring Sunshine firewall..."
 
-          # TCP
           $tcpPorts = @(
             47984,
             47989,
@@ -511,7 +401,6 @@ jobs:
                 -ErrorAction SilentlyContinue
           }
 
-          # UDP
           $udpPorts = @(
             47998,
             47999,
@@ -530,10 +419,10 @@ jobs:
                 -ErrorAction SilentlyContinue
           }
 
-          Write-Host "Sunshine firewall configured."
+          Write-Host "Firewall configured."
 
       # ==========================================
-      # 14. RESTRICT RDP TO TAILSCALE
+      # 13. RESTRICT RDP TO TAILSCALE
       # ==========================================
       - name: Configure RDP Firewall
         shell: powershell
@@ -547,7 +436,7 @@ jobs:
           Write-Host "RDP restricted to Tailscale."
 
       # ==========================================
-      # 15. INSTALL STEAM
+      # 14. INSTALL STEAM
       # ==========================================
       - name: Install Steam
         shell: powershell
@@ -565,7 +454,7 @@ jobs:
 
           if ($steam) {
 
-              Write-Host "Steam is already installed."
+              Write-Host "Steam already installed."
 
           } else {
 
@@ -587,15 +476,15 @@ jobs:
           }
 
       # ==========================================
-      # 16. VERIFY SUNSHINE
+      # 15. TEST SUNSHINE
       # ==========================================
-      - name: Verify Sunshine
+      - name: Test Sunshine
         shell: powershell
         run: |
 
           Write-Host ""
           Write-Host "======================================"
-          Write-Host "       SUNSHINE STATUS"
+          Write-Host "       TESTING SUNSHINE"
           Write-Host "======================================"
 
           $service = Get-Service `
@@ -603,13 +492,10 @@ jobs:
             -ErrorAction SilentlyContinue
 
           if ($service) {
-              Write-Host "Service status: $($service.Status)"
-          } else {
-              Write-Host "SunshineService not found."
+              Write-Host "Service: $($service.Status)"
           }
 
-          Write-Host ""
-          Write-Host "Testing Sunshine Web UI..."
+          Start-Sleep -Seconds 5
 
           $test = Test-NetConnection `
             -ComputerName "127.0.0.1" `
@@ -617,13 +503,17 @@ jobs:
             -WarningAction SilentlyContinue
 
           if ($test.TcpTestSucceeded) {
+
               Write-Host "Sunshine Web UI: ONLINE"
+
           } else {
-              Write-Host "Sunshine Web UI: OFFLINE"
+
+              Write-Error "Sunshine Web UI is not responding."
+              exit 1
           }
 
       # ==========================================
-      # 17. CONNECTION DETAILS
+      # 16. CONNECTION DETAILS
       # ==========================================
       - name: Connection Details
         shell: powershell
@@ -637,8 +527,8 @@ jobs:
           Write-Host "=============================================="
           Write-Host "       VIRTUAL GAMING PC ONLINE"
           Write-Host "=============================================="
-          Write-Host ""
 
+          Write-Host ""
           Write-Host "Tailscale IP:"
           Write-Host $ip
 
@@ -651,14 +541,6 @@ jobs:
           Write-Host "https://$ip`:47990"
 
           Write-Host ""
-          Write-Host "Windows Username:"
-          Write-Host "PCGamer"
-
-          Write-Host ""
-          Write-Host "Windows Password:"
-          Write-Host $env:PC_PASSWORD
-
-          Write-Host ""
           Write-Host "Sunshine Username:"
           Write-Host "PCGamer"
 
@@ -666,59 +548,52 @@ jobs:
           Write-Host "Sunshine Password:"
           Write-Host $env:SUNSHINE_PASSWORD
 
+          Write-Host ""
+          Write-Host "Windows Username:"
+          Write-Host "PCGamer"
+
+          Write-Host ""
+          Write-Host "Windows Password:"
+          Write-Host $env:PC_PASSWORD
+
           @"
           # 🎮 VIRTUAL GAMING PC
 
           ## 🟢 Status
-
           ONLINE
 
-          ## 🌐 Tailscale
-
-          **IP:**
+          ## 🌐 Tailscale IP
 
           $ip
 
-          ## 🎮 Moonlight
-
-          **Host:**
+          ## 🎮 Moonlight Host
 
           $ip
 
-          ## ☀️ Sunshine
-
-          **Web UI:**
+          ## ☀️ Sunshine Web UI
 
           https://$ip`:47990
 
-          **Username:**
+          ## Sunshine Login
 
-          PCGamer
+          Username: PCGamer
 
-          **Password:**
-
-          $env:SUNSHINE_PASSWORD
+          Password: $env:SUNSHINE_PASSWORD
 
           ## 🖥️ Windows RDP
 
-          **Address:**
+          Address: $ip`:3389
 
-          $ip`:3389
+          Username: PCGamer
 
-          **Username:**
-
-          PCGamer
-
-          **Password:**
-
-          $env:PC_PASSWORD
+          Password: $env:PC_PASSWORD
 
           "@ | Out-File `
             -FilePath $env:GITHUB_STEP_SUMMARY `
             -Append
 
       # ==========================================
-      # 18. KEEP PC RUNNING
+      # 17. KEEP RUNNER ALIVE
       # ==========================================
       - name: Keep PC Running
         shell: powershell
