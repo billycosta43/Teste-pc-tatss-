@@ -1,4 +1,4 @@
-name: PC Virtual Gamer
+name: Virtual Gaming PC
 
 on:
   workflow_dispatch:
@@ -10,24 +10,30 @@ jobs:
 
     steps:
 
-      - name: Iniciar PC
+      # ==========================================
+      # PC VIRTUAL
+      # ==========================================
+      - name: Start Virtual PC
         run: |
           echo "======================================"
-          echo "       PC VIRTUAL GAMER INICIADO"
+          echo "       VIRTUAL GAMING PC"
           echo "======================================"
 
           echo "CPU:"
           nproc
 
           echo
-          echo "MEMÓRIA:"
+          echo "MEMORY:"
           free -h
 
           echo
-          echo "SISTEMA:"
+          echo "SYSTEM:"
           uname -a
 
-      - name: Instalar ambiente gráfico
+      # ==========================================
+      # INSTALAR AMBIENTE GRÁFICO
+      # ==========================================
+      - name: Install Desktop Environment
         run: |
           sudo apt-get update
 
@@ -49,9 +55,12 @@ jobs:
             pulseaudio \
             pavucontrol \
             mesa-utils \
-            vulkan-tools
+            pciutils
 
-      - name: Instalar Steam
+      # ==========================================
+      # INSTALAR STEAM
+      # ==========================================
+      - name: Install Steam
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
@@ -59,7 +68,12 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             steam-installer
 
-      - name: Criar usuário do PC
+          echo "Steam installed."
+
+      # ==========================================
+      # CRIAR USUÁRIO
+      # ==========================================
+      - name: Create PC User
         run: |
           if ! id pc >/dev/null 2>&1; then
             sudo useradd -m -s /bin/bash pc
@@ -70,43 +84,98 @@ jobs:
           sudo mkdir -p /home/pc
           sudo chown -R pc:pc /home/pc
 
-      - name: Configurar XFCE
+      # ==========================================
+      # CONFIGURAR XFCE
+      # ==========================================
+      - name: Configure XFCE
         run: |
-          sudo -u pc bash -c 'mkdir -p /home/pc/.config/xfce4'
+          sudo -u pc mkdir -p /home/pc/.config/xfce4
 
-          sudo -u pc bash -c 'cat > /home/pc/.xinitrc <<EOF
+          sudo tee /home/pc/.xinitrc > /dev/null <<'EOF'
           #!/bin/bash
+
           export DISPLAY=:1
           export XDG_CURRENT_DESKTOP=XFCE
-          export XDG_CONFIG_DIRS=/etc/xdg/xdg-xfce:/etc/xdg
+
           startxfce4
-          EOF'
+          EOF
 
           sudo chmod +x /home/pc/.xinitrc
+          sudo chown pc:pc /home/pc/.xinitrc
 
-      - name: Criar senha do acesso web
+      # ==========================================
+      # TAILSCALE
+      # ==========================================
+      - name: Install Tailscale
         run: |
-          sudo htpasswd -bc \
-            /etc/nginx/.htpasswd \
-            pc \
-            "${{ secrets.WEB_PASSWORD }}"
+          curl -fsSL https://tailscale.com/install.sh | sh
 
-      - name: Configurar NoVNC
+          echo "Tailscale installed."
+
+      # ==========================================
+      # CONECTAR TAILSCALE
+      # ==========================================
+      - name: Connect Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
-          sudo mkdir -p /opt/pc
+          if [ -z "$TS_AUTHKEY" ]; then
+            echo "ERROR: TS_AUTHKEY secret is missing."
+            exit 1
+          fi
 
-          sudo tee /opt/pc/start-pc.sh > /dev/null <<'EOF'
-          #!/bin/bash
-
-          export DISPLAY=:1
-
-          Xvfb :1 -screen 0 1920x1080x24 &
-          sleep 3
-
-          sudo -u pc startxfce4 &
+          sudo tailscale up \
+            --auth-key="$TS_AUTHKEY" \
+            --hostname=virtual-gaming-pc
 
           sleep 5
 
+      # ==========================================
+      # MOSTRAR IP TAILSCALE
+      # ==========================================
+      - name: Show Tailscale IP
+        run: |
+          echo
+          echo "======================================"
+          echo "       TAILSCALE INFORMATION"
+          echo "======================================"
+
+          echo
+          echo "TAILSCALE IPv4:"
+          sudo tailscale ip -4
+
+          echo
+          echo "TAILSCALE STATUS:"
+          sudo tailscale status
+
+          echo
+          echo "======================================"
+
+      # ==========================================
+      # CONFIGURAR NOVNC
+      # ==========================================
+      - name: Configure NoVNC
+        run: |
+          sudo mkdir -p /opt/virtual-pc
+
+          sudo tee /opt/virtual-pc/start.sh > /dev/null <<'EOF'
+          #!/bin/bash
+
+          export DISPLAY=:1
+
+          # Virtual display
+          Xvfb :1 \
+            -screen 0 1920x1080x24 \
+            -ac &
+
+          sleep 5
+
+          # XFCE desktop
+          sudo -u pc DISPLAY=:1 startxfce4 &
+
+          sleep 10
+
+          # VNC server
           x11vnc \
             -display :1 \
             -forever \
@@ -114,21 +183,44 @@ jobs:
             -rfbport 5900 \
             -nopw &
 
+          sleep 3
+
+          # NoVNC
           websockify \
             --web=/usr/share/novnc \
             6080 \
             localhost:5900 &
           EOF
 
-          sudo chmod +x /opt/pc/start-pc.sh
+          sudo chmod +x /opt/virtual-pc/start.sh
 
-      - name: Configurar Nginx
+      # ==========================================
+      # SENHA DO NOVNC
+      # ==========================================
+      - name: Configure Web Password
+        env:
+          WEB_PASSWORD: ${{ secrets.WEB_PASSWORD }}
         run: |
-          sudo tee /etc/nginx/sites-available/pc > /dev/null <<'EOF'
+          if [ -z "$WEB_PASSWORD" ]; then
+            echo "ERROR: WEB_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          sudo htpasswd -bc \
+            /etc/nginx/.htpasswd \
+            pc \
+            "$WEB_PASSWORD"
+
+      # ==========================================
+      # NGINX
+      # ==========================================
+      - name: Configure Web Access
+        run: |
+          sudo tee /etc/nginx/sites-available/virtual-pc > /dev/null <<'EOF'
           server {
               listen 8080;
 
-              auth_basic "PC Virtual";
+              auth_basic "Virtual Gaming PC";
               auth_basic_user_file /etc/nginx/.htpasswd;
 
               location / {
@@ -147,32 +239,34 @@ jobs:
           sudo rm -f /etc/nginx/sites-enabled/default
 
           sudo ln -sf \
-            /etc/nginx/sites-available/pc \
-            /etc/nginx/sites-enabled/pc
+            /etc/nginx/sites-available/virtual-pc \
+            /etc/nginx/sites-enabled/virtual-pc
 
           sudo nginx -t
           sudo systemctl restart nginx
 
-      - name: Iniciar interface
+      # ==========================================
+      # INICIAR PC
+      # ==========================================
+      - name: Start Desktop
         run: |
-          sudo /opt/pc/start-pc.sh
+          sudo /opt/virtual-pc/start.sh
 
-          sleep 10
+          sleep 15
 
           echo
           echo "======================================"
-          echo "       INTERFACE DO PC INICIADA"
+          echo "       VIRTUAL PC ONLINE"
           echo "======================================"
 
-          echo
-          echo "PORTA NOVNC: 6080"
-          echo "PORTA WEB: 8080"
-
-      - name: Informações do PC
+      # ==========================================
+      # INFORMAÇÕES
+      # ==========================================
+      - name: Show PC Information
         run: |
           echo
           echo "======================================"
-          echo "       INFORMAÇÕES DO PC"
+          echo "       PC INFORMATION"
           echo "======================================"
 
           echo
@@ -180,11 +274,11 @@ jobs:
           nproc
 
           echo
-          echo "MEMÓRIA:"
+          echo "MEMORY:"
           free -h
 
           echo
-          echo "DISCO:"
+          echo "DISK:"
           df -h /
 
           echo
@@ -192,16 +286,29 @@ jobs:
           lspci | grep -Ei "vga|3d|display" || true
 
           echo
-          echo "======================================"
-          echo "       PC VIRTUAL ONLINE"
+          echo "TAILSCALE IP:"
+          sudo tailscale ip -4
+
+          echo
+          echo "NOVNC PORT:"
+          echo "6080"
+
+          echo
+          echo "WEB PORT:"
+          echo "8080"
+
+          echo
           echo "======================================"
 
-      - name: Manter PC ligado
+      # ==========================================
+      # MANTER PC LIGADO
+      # ==========================================
+      - name: Keep PC Running
         run: |
-          echo "PC Virtual Gamer está ativo."
+          echo "Virtual Gaming PC is running."
 
           while true
           do
-            echo "PC ativo: $(date)"
+            echo "PC ACTIVE: $(date)"
             sleep 60
           done
