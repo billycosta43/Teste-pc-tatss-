@@ -12,7 +12,7 @@ jobs:
     steps:
 
       # ==========================================
-      # 1. CHECKOUT
+      # 1. CHECKOUT REPOSITORY
       # ==========================================
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -76,15 +76,34 @@ jobs:
 
           Write-Host "Creating PCGamer account..."
 
-          $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%'
+          # Characters
+          $upper   = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+          $lower   = "abcdefghijkmnopqrstuvwxyz"
+          $numbers = "23456789"
+          $symbols = "!@#$%"
 
+          # Guarantee password complexity
+          $passwordChars = @()
+
+          $passwordChars += $upper[(Get-Random -Maximum $upper.Length)]
+          $passwordChars += $lower[(Get-Random -Maximum $lower.Length)]
+          $passwordChars += $numbers[(Get-Random -Maximum $numbers.Length)]
+          $passwordChars += $symbols[(Get-Random -Maximum $symbols.Length)]
+
+          $allChars = $upper + $lower + $numbers + $symbols
+
+          1..12 | ForEach-Object {
+              $passwordChars += $allChars[
+                  (Get-Random -Maximum $allChars.Length)
+              ]
+          }
+
+          # Shuffle password
           $password = -join (
-            1..16 | ForEach-Object {
-              $chars[(Get-Random -Maximum $chars.Length)]
-            }
+              $passwordChars | Sort-Object { Get-Random }
           )
 
-          # Mask password from normal GitHub log output
+          # Hide password from normal GitHub logs
           Write-Output "::add-mask::$password"
 
           $securePassword = ConvertTo-SecureString `
@@ -103,7 +122,8 @@ jobs:
                 -Password $securePassword `
                 -Description "Virtual Gaming PC"
 
-          } else {
+          }
+          else {
 
               Set-LocalUser `
                 -Name "PCGamer" `
@@ -115,10 +135,9 @@ jobs:
             -Member "PCGamer" `
             -ErrorAction SilentlyContinue
 
-          # Save password for following steps
           "PC_PASSWORD=$password" >> $env:GITHUB_ENV
 
-          Write-Host "PCGamer account created."
+          Write-Host "PCGamer account created successfully."
 
       # ==========================================
       # 5. INSTALL TAILSCALE
@@ -130,7 +149,6 @@ jobs:
           Write-Host "Downloading Tailscale..."
 
           $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-
           $msi = "$env:TEMP\tailscale.msi"
 
           Invoke-WebRequest `
@@ -147,11 +165,11 @@ jobs:
             -PassThru
 
           if ($process.ExitCode -ne 0) {
-              Write-Error "Tailscale installation failed. Exit code: $($process.ExitCode)"
+              Write-Error "Tailscale installation failed."
               exit 1
           }
 
-          Write-Host "Tailscale installed."
+          Write-Host "Tailscale installed successfully."
 
       # ==========================================
       # 6. START TAILSCALE
@@ -188,8 +206,7 @@ jobs:
           Start-Sleep -Seconds 5
 
           Write-Host ""
-          Write-Host "Tailscale status:"
-          & $tailscale status
+          Write-Host "Tailscale connected."
 
       # ==========================================
       # 7. GET TAILSCALE IP
@@ -219,7 +236,7 @@ jobs:
           Write-Host "======================================"
 
       # ==========================================
-      # 8. RESTRICT RDP TO TAILSCALE
+      # 8. CONFIGURE RDP FIREWALL
       # ==========================================
       - name: Configure RDP Firewall
         shell: powershell
@@ -241,16 +258,39 @@ jobs:
         shell: powershell
         run: |
 
-          Write-Host "Installing Google Chrome..."
+          Write-Host "Checking Google Chrome..."
 
-          winget install `
-            --id Google.Chrome `
-            --exact `
-            --silent `
-            --accept-package-agreements `
-            --accept-source-agreements
+          $chrome = @(
+              "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe",
+              "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+          ) | Where-Object {
+              Test-Path $_
+          }
 
-          Write-Host "Chrome installed."
+          if ($chrome) {
+
+              Write-Host "Chrome is already installed."
+              Write-Host "Skipping installation."
+
+          }
+          else {
+
+              Write-Host "Installing Google Chrome..."
+
+              winget install `
+                --id Google.Chrome `
+                --exact `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Chrome installation failed."
+                  exit 1
+              }
+
+              Write-Host "Chrome installed."
+          }
 
       # ==========================================
       # 10. INSTALL 7-ZIP
@@ -259,16 +299,42 @@ jobs:
         shell: powershell
         run: |
 
-          Write-Host "Installing 7-Zip..."
+          Write-Host "Checking 7-Zip..."
 
-          winget install `
-            --id 7zip.7zip `
-            --exact `
-            --silent `
-            --accept-package-agreements `
-            --accept-source-agreements
+          $sevenZipPaths = @(
+              "${env:ProgramFiles}\7-Zip\7z.exe",
+              "${env:ProgramFiles(x86)}\7-Zip\7z.exe"
+          )
 
-          Write-Host "7-Zip installed."
+          $sevenZip = $sevenZipPaths | Where-Object {
+              Test-Path $_
+          }
+
+          if ($sevenZip) {
+
+              Write-Host "7-Zip is already installed."
+              Write-Host "Skipping installation."
+
+          }
+          else {
+
+              Write-Host "7-Zip is not installed."
+              Write-Host "Installing 7-Zip..."
+
+              winget install `
+                --id 7zip.7zip `
+                --exact `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "7-Zip installation failed."
+                  exit 1
+              }
+
+              Write-Host "7-Zip installed successfully."
+          }
 
       # ==========================================
       # 11. INSTALL STEAM
@@ -277,16 +343,41 @@ jobs:
         shell: powershell
         run: |
 
-          Write-Host "Installing Steam..."
+          Write-Host "Checking Steam..."
 
-          winget install `
-            --id Valve.Steam `
-            --exact `
-            --silent `
-            --accept-package-agreements `
-            --accept-source-agreements
+          $steamPaths = @(
+              "${env:ProgramFiles(x86)}\Steam\steam.exe",
+              "${env:ProgramFiles}\Steam\steam.exe"
+          )
 
-          Write-Host "Steam installation finished."
+          $steam = $steamPaths | Where-Object {
+              Test-Path $_
+          }
+
+          if ($steam) {
+
+              Write-Host "Steam is already installed."
+              Write-Host "Skipping installation."
+
+          }
+          else {
+
+              Write-Host "Installing Steam..."
+
+              winget install `
+                --id Valve.Steam `
+                --exact `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements
+
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Steam installation failed."
+                  exit 1
+              }
+
+              Write-Host "Steam installed successfully."
+          }
 
       # ==========================================
       # 12. CONNECTION DETAILS
@@ -313,7 +404,7 @@ jobs:
           Write-Host $ip
 
           Write-Host ""
-          Write-Host "RDP address:"
+          Write-Host "RDP Address:"
           Write-Host "$ip`:3389"
 
           Write-Host ""
@@ -327,13 +418,10 @@ jobs:
           Write-Host ""
           Write-Host "=============================================="
 
-          # Add connection information to GitHub Summary
           @"
           # 🎮 Virtual Gaming PC
 
-          ## Connection
-
-          **Computer:** `virtual-gaming-pc`
+          **Status:** 🟢 Online
 
           **Tailscale IP:** `$ip`
 
@@ -342,16 +430,6 @@ jobs:
           **Username:** `PCGamer`
 
           **Password:** `$env:PC_PASSWORD`
-
-          ## Status
-
-          🟢 PC Online
-
-          🟢 RDP Enabled
-
-          🟢 Tailscale Connected
-
-          🟢 Steam Installed
 
           "@ | Out-File `
             -FilePath $env:GITHUB_STEP_SUMMARY `
