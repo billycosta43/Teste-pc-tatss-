@@ -4,311 +4,377 @@ on:
   workflow_dispatch:
 
 jobs:
-  pc:
-    runs-on: ubuntu-latest
+  deploy-rdp:
+    name: deploy-rdp
+    runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
 
       # ==========================================
-      # PC VIRTUAL
+      # 1. CHECKOUT
       # ==========================================
-      - name: Start Virtual PC
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ==========================================
+      # 2. SYSTEM INFORMATION
+      # ==========================================
+      - name: System Information
+        shell: powershell
         run: |
-          echo "======================================"
-          echo "       VIRTUAL GAMING PC"
-          echo "======================================"
+          Write-Host "======================================"
+          Write-Host "       SYSTEM INFORMATION"
+          Write-Host "======================================"
 
-          echo "CPU:"
-          nproc
+          Write-Host ""
+          Write-Host "CPU:"
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
 
-          echo
-          echo "MEMORY:"
-          free -h
+          Write-Host ""
+          Write-Host "RAM:"
+          $ram = Get-CimInstance Win32_ComputerSystem
+          Write-Host "$([math]::Round($ram.TotalPhysicalMemory / 1GB, 2)) GB"
 
-          echo
-          echo "SYSTEM:"
-          uname -a
+          Write-Host ""
+          Write-Host "GPU:"
+          Get-CimInstance Win32_VideoController |
+            Select-Object Name
 
       # ==========================================
-      # INSTALAR AMBIENTE GRÁFICO
+      # 3. ENABLE RDP
       # ==========================================
-      - name: Install Desktop Environment
+      - name: Enable RDP
+        shell: powershell
         run: |
-          sudo apt-get update
+          Write-Host "Enabling Remote Desktop..."
 
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            xfce4 \
-            xfce4-goodies \
-            xfce4-terminal \
-            dbus-x11 \
-            xvfb \
-            x11vnc \
-            novnc \
-            websockify \
-            nginx \
-            apache2-utils \
-            curl \
-            wget \
-            unzip \
-            git \
-            pulseaudio \
-            pavucontrol \
-            mesa-utils \
-            pciutils
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          Set-Service `
+            -Name "TermService" `
+            -StartupType Automatic
+
+          Start-Service `
+            -Name "TermService"
+
+          Enable-NetFirewallRule `
+            -DisplayGroup "Remote Desktop"
+
+          Write-Host "RDP enabled."
 
       # ==========================================
-      # INSTALAR STEAM
+      # 4. CREATE USER + AUTOMATIC PASSWORD
       # ==========================================
-      - name: Install Steam
+      - name: Create User Account
+        shell: powershell
         run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
 
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            steam-installer
+          Write-Host "Creating PCGamer account..."
 
-          echo "Steam installed."
+          $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%'
+
+          $password = -join (
+            1..16 | ForEach-Object {
+              $chars[(Get-Random -Maximum $chars.Length)]
+            }
+          )
+
+          # Mask password from normal GitHub log output
+          Write-Output "::add-mask::$password"
+
+          $securePassword = ConvertTo-SecureString `
+            $password `
+            -AsPlainText `
+            -Force
+
+          $existingUser = Get-LocalUser `
+            -Name "PCGamer" `
+            -ErrorAction SilentlyContinue
+
+          if ($null -eq $existingUser) {
+
+              New-LocalUser `
+                -Name "PCGamer" `
+                -Password $securePassword `
+                -Description "Virtual Gaming PC"
+
+          } else {
+
+              Set-LocalUser `
+                -Name "PCGamer" `
+                -Password $securePassword
+          }
+
+          Add-LocalGroupMember `
+            -Group "Remote Desktop Users" `
+            -Member "PCGamer" `
+            -ErrorAction SilentlyContinue
+
+          # Save password for following steps
+          "PC_PASSWORD=$password" >> $env:GITHUB_ENV
+
+          Write-Host "PCGamer account created."
 
       # ==========================================
-      # CRIAR USUÁRIO
+      # 5. INSTALL TAILSCALE
       # ==========================================
-      - name: Create PC User
+      - name: Install Tailscale (Silent)
+        shell: powershell
         run: |
-          if ! id pc >/dev/null 2>&1; then
-            sudo useradd -m -s /bin/bash pc
-          fi
 
-          sudo usermod -aG sudo pc
+          Write-Host "Downloading Tailscale..."
 
-          sudo mkdir -p /home/pc
-          sudo chown -R pc:pc /home/pc
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
 
-      # ==========================================
-      # CONFIGURAR XFCE
-      # ==========================================
-      - name: Configure XFCE
-        run: |
-          sudo -u pc mkdir -p /home/pc/.config/xfce4
+          $msi = "$env:TEMP\tailscale.msi"
 
-          sudo tee /home/pc/.xinitrc > /dev/null <<'EOF'
-          #!/bin/bash
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $msi `
+            -UseBasicParsing
 
-          export DISPLAY=:1
-          export XDG_CURRENT_DESKTOP=XFCE
+          Write-Host "Installing Tailscale..."
 
-          startxfce4
-          EOF
+          $process = Start-Process `
+            -FilePath "msiexec.exe" `
+            -ArgumentList "/i `"$msi`" /qn /norestart" `
+            -Wait `
+            -PassThru
 
-          sudo chmod +x /home/pc/.xinitrc
-          sudo chown pc:pc /home/pc/.xinitrc
+          if ($process.ExitCode -ne 0) {
+              Write-Error "Tailscale installation failed. Exit code: $($process.ExitCode)"
+              exit 1
+          }
 
-      # ==========================================
-      # TAILSCALE
-      # ==========================================
-      - name: Install Tailscale
-        run: |
-          curl -fsSL https://tailscale.com/install.sh | sh
-
-          echo "Tailscale installed."
+          Write-Host "Tailscale installed."
 
       # ==========================================
-      # CONECTAR TAILSCALE
+      # 6. START TAILSCALE
       # ==========================================
-      - name: Connect Tailscale
+      - name: Start Tailscale
+        shell: powershell
         env:
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
         run: |
-          if [ -z "$TS_AUTHKEY" ]; then
-            echo "ERROR: TS_AUTHKEY secret is missing."
-            exit 1
-          fi
 
-          sudo tailscale up \
-            --auth-key="$TS_AUTHKEY" \
-            --hostname=virtual-gaming-pc
-
-          sleep 5
-
-      # ==========================================
-      # MOSTRAR IP TAILSCALE
-      # ==========================================
-      - name: Show Tailscale IP
-        run: |
-          echo
-          echo "======================================"
-          echo "       TAILSCALE INFORMATION"
-          echo "======================================"
-
-          echo
-          echo "TAILSCALE IPv4:"
-          sudo tailscale ip -4
-
-          echo
-          echo "TAILSCALE STATUS:"
-          sudo tailscale status
-
-          echo
-          echo "======================================"
-
-      # ==========================================
-      # CONFIGURAR NOVNC
-      # ==========================================
-      - name: Configure NoVNC
-        run: |
-          sudo mkdir -p /opt/virtual-pc
-
-          sudo tee /opt/virtual-pc/start.sh > /dev/null <<'EOF'
-          #!/bin/bash
-
-          export DISPLAY=:1
-
-          # Virtual display
-          Xvfb :1 \
-            -screen 0 1920x1080x24 \
-            -ac &
-
-          sleep 5
-
-          # XFCE desktop
-          sudo -u pc DISPLAY=:1 startxfce4 &
-
-          sleep 10
-
-          # VNC server
-          x11vnc \
-            -display :1 \
-            -forever \
-            -shared \
-            -rfbport 5900 \
-            -nopw &
-
-          sleep 3
-
-          # NoVNC
-          websockify \
-            --web=/usr/share/novnc \
-            6080 \
-            localhost:5900 &
-          EOF
-
-          sudo chmod +x /opt/virtual-pc/start.sh
-
-      # ==========================================
-      # SENHA DO NOVNC
-      # ==========================================
-      - name: Configure Web Password
-        env:
-          WEB_PASSWORD: ${{ secrets.WEB_PASSWORD }}
-        run: |
-          if [ -z "$WEB_PASSWORD" ]; then
-            echo "ERROR: WEB_PASSWORD secret is missing."
-            exit 1
-          fi
-
-          sudo htpasswd -bc \
-            /etc/nginx/.htpasswd \
-            pc \
-            "$WEB_PASSWORD"
-
-      # ==========================================
-      # NGINX
-      # ==========================================
-      - name: Configure Web Access
-        run: |
-          sudo tee /etc/nginx/sites-available/virtual-pc > /dev/null <<'EOF'
-          server {
-              listen 8080;
-
-              auth_basic "Virtual Gaming PC";
-              auth_basic_user_file /etc/nginx/.htpasswd;
-
-              location / {
-                  proxy_pass http://127.0.0.1:6080;
-
-                  proxy_http_version 1.1;
-
-                  proxy_set_header Upgrade $http_upgrade;
-                  proxy_set_header Connection "upgrade";
-
-                  proxy_set_header Host $host;
-              }
+          if ([string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) {
+              Write-Error "TS_AUTHKEY secret is missing."
+              exit 1
           }
-          EOF
 
-          sudo rm -f /etc/nginx/sites-enabled/default
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
 
-          sudo ln -sf \
-            /etc/nginx/sites-available/virtual-pc \
-            /etc/nginx/sites-enabled/virtual-pc
+          if (-not (Test-Path $tailscale)) {
+              Write-Error "Tailscale executable was not found."
+              exit 1
+          }
 
-          sudo nginx -t
-          sudo systemctl restart nginx
+          Write-Host "Connecting to Tailscale..."
+
+          & $tailscale up `
+            --auth-key="$env:TS_AUTHKEY" `
+            --hostname="virtual-gaming-pc"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Tailscale connection failed."
+              exit 1
+          }
+
+          Start-Sleep -Seconds 5
+
+          Write-Host ""
+          Write-Host "Tailscale status:"
+          & $tailscale status
 
       # ==========================================
-      # INICIAR PC
+      # 7. GET TAILSCALE IP
       # ==========================================
-      - name: Start Desktop
+      - name: Get Tailscale IP
+        shell: powershell
         run: |
-          sudo /opt/virtual-pc/start.sh
 
-          sleep 15
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
 
-          echo
-          echo "======================================"
-          echo "       VIRTUAL PC ONLINE"
-          echo "======================================"
+          $ip = (& $tailscale ip -4).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($ip)) {
+              Write-Error "Could not obtain Tailscale IP."
+              exit 1
+          }
+
+          "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
+
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "       TAILSCALE IP"
+          Write-Host "======================================"
+          Write-Host ""
+          Write-Host $ip
+          Write-Host ""
+          Write-Host "======================================"
 
       # ==========================================
-      # INFORMAÇÕES
+      # 8. RESTRICT RDP TO TAILSCALE
       # ==========================================
-      - name: Show PC Information
+      - name: Configure RDP Firewall
+        shell: powershell
         run: |
-          echo
-          echo "======================================"
-          echo "       PC INFORMATION"
-          echo "======================================"
 
-          echo
-          echo "CPU:"
-          nproc
+          Write-Host "Configuring RDP firewall..."
 
-          echo
-          echo "MEMORY:"
-          free -h
+          Get-NetFirewallRule `
+            -DisplayGroup "Remote Desktop" |
+            Set-NetFirewallRule `
+            -RemoteAddress "100.64.0.0/10"
 
-          echo
-          echo "DISK:"
-          df -h /
-
-          echo
-          echo "GPU:"
-          lspci | grep -Ei "vga|3d|display" || true
-
-          echo
-          echo "TAILSCALE IP:"
-          sudo tailscale ip -4
-
-          echo
-          echo "NOVNC PORT:"
-          echo "6080"
-
-          echo
-          echo "WEB PORT:"
-          echo "8080"
-
-          echo
-          echo "======================================"
+          Write-Host "RDP restricted to Tailscale."
 
       # ==========================================
-      # MANTER PC LIGADO
+      # 9. INSTALL GOOGLE CHROME
+      # ==========================================
+      - name: Install Google Chrome (Direct)
+        shell: powershell
+        run: |
+
+          Write-Host "Installing Google Chrome..."
+
+          winget install `
+            --id Google.Chrome `
+            --exact `
+            --silent `
+            --accept-package-agreements `
+            --accept-source-agreements
+
+          Write-Host "Chrome installed."
+
+      # ==========================================
+      # 10. INSTALL 7-ZIP
+      # ==========================================
+      - name: Install 7-Zip (Direct)
+        shell: powershell
+        run: |
+
+          Write-Host "Installing 7-Zip..."
+
+          winget install `
+            --id 7zip.7zip `
+            --exact `
+            --silent `
+            --accept-package-agreements `
+            --accept-source-agreements
+
+          Write-Host "7-Zip installed."
+
+      # ==========================================
+      # 11. INSTALL STEAM
+      # ==========================================
+      - name: Install Steam
+        shell: powershell
+        run: |
+
+          Write-Host "Installing Steam..."
+
+          winget install `
+            --id Valve.Steam `
+            --exact `
+            --silent `
+            --accept-package-agreements `
+            --accept-source-agreements
+
+          Write-Host "Steam installation finished."
+
+      # ==========================================
+      # 12. CONNECTION DETAILS
+      # ==========================================
+      - name: Connection Details
+        shell: powershell
+        run: |
+
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+
+          $ip = (& $tailscale ip -4).Trim()
+
+          Write-Host ""
+          Write-Host "=============================================="
+          Write-Host "       VIRTUAL GAMING PC ONLINE"
+          Write-Host "=============================================="
+          Write-Host ""
+
+          Write-Host "Computer:"
+          Write-Host "virtual-gaming-pc"
+
+          Write-Host ""
+          Write-Host "Tailscale IP:"
+          Write-Host $ip
+
+          Write-Host ""
+          Write-Host "RDP address:"
+          Write-Host "$ip`:3389"
+
+          Write-Host ""
+          Write-Host "Username:"
+          Write-Host "PCGamer"
+
+          Write-Host ""
+          Write-Host "Password:"
+          Write-Host $env:PC_PASSWORD
+
+          Write-Host ""
+          Write-Host "=============================================="
+
+          # Add connection information to GitHub Summary
+          @"
+          # 🎮 Virtual Gaming PC
+
+          ## Connection
+
+          **Computer:** `virtual-gaming-pc`
+
+          **Tailscale IP:** `$ip`
+
+          **RDP Address:** `$ip`:3389
+
+          **Username:** `PCGamer`
+
+          **Password:** `$env:PC_PASSWORD`
+
+          ## Status
+
+          🟢 PC Online
+
+          🟢 RDP Enabled
+
+          🟢 Tailscale Connected
+
+          🟢 Steam Installed
+
+          "@ | Out-File `
+            -FilePath $env:GITHUB_STEP_SUMMARY `
+            -Append
+
+      # ==========================================
+      # 13. KEEP PC RUNNING
       # ==========================================
       - name: Keep PC Running
+        shell: powershell
         run: |
-          echo "Virtual Gaming PC is running."
 
-          while true
-          do
-            echo "PC ACTIVE: $(date)"
-            sleep 60
-          done
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "     VIRTUAL GAMING PC IS RUNNING"
+          Write-Host "======================================"
+          Write-Host ""
+          Write-Host "Do not cancel this workflow."
+          Write-Host ""
+
+          while ($true) {
+
+              Write-Host "PC ACTIVE: $(Get-Date)"
+
+              Start-Sleep -Seconds 60
+          }
