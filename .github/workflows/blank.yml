@@ -11,6 +11,10 @@ jobs:
 
     steps:
 
+      # ==========================================
+      # CHECKOUT
+      # ==========================================
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -65,7 +69,7 @@ jobs:
           Write-Host "RDP enabled."
 
       # ==========================================
-      # USUÁRIO WINDOWS
+      # CRIAR USUÁRIO WINDOWS
       # ==========================================
 
       - name: Create User Account
@@ -129,17 +133,32 @@ jobs:
               -Password $securePassword
           }
 
+          # Adicionar ao Remote Desktop Users
           Add-LocalGroupMember `
             -Group "Remote Desktop Users" `
             -Member "PCGamer" `
             -ErrorAction SilentlyContinue
 
+          # IMPORTANTE:
+          # Adicionar PCGamer aos Administrators
+          Add-LocalGroupMember `
+            -Group "Administrators" `
+            -Member "PCGamer" `
+            -ErrorAction SilentlyContinue
+
           "PC_PASSWORD=$password" >> $env:GITHUB_ENV
 
-          Write-Host "Windows account created."
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "WINDOWS ACCOUNT"
+          Write-Host "======================================"
+          Write-Host "Username: PCGamer"
+          Write-Host "Password: $password"
+          Write-Host "Administrator: YES"
+          Write-Host "======================================"
 
       # ==========================================
-      # TAILSCALE
+      # TAILSCALE - INSTALAR
       # ==========================================
 
       - name: Install Tailscale
@@ -167,6 +186,10 @@ jobs:
           }
 
           Write-Host "Tailscale installed."
+
+      # ==========================================
+      # TAILSCALE - CONECTAR
+      # ==========================================
 
       - name: Start Tailscale
         shell: powershell
@@ -199,7 +222,7 @@ jobs:
           Write-Host "Tailscale connected."
 
       # ==========================================
-      # PEGAR IP TAILSCALE
+      # PEGAR IP DO TAILSCALE
       # ==========================================
 
       - name: Get Tailscale IP
@@ -218,12 +241,13 @@ jobs:
 
           Write-Host ""
           Write-Host "======================================"
-          Write-Host "TAILSCALE IP:"
+          Write-Host "TAILSCALE IP"
+          Write-Host "======================================"
           Write-Host $ip
           Write-Host "======================================"
 
       # ==========================================
-      # SUNSHINE
+      # SUNSHINE - INSTALAR
       # ==========================================
 
       - name: Install Sunshine
@@ -258,13 +282,13 @@ jobs:
           Write-Host "Sunshine installed successfully."
 
       # ==========================================
-      # PARAR SUNSHINE ANTES DE CONFIGURAR
+      # PARAR SUNSHINE
       # ==========================================
 
-      - name: Stop Sunshine Before Configuration
+      - name: Stop Sunshine
         shell: powershell
         run: |
-          Write-Host "Stopping Sunshine temporarily..."
+          Write-Host "Stopping Sunshine before configuration..."
 
           $service = Get-Service `
             -Name "SunshineService" `
@@ -285,22 +309,24 @@ jobs:
             Get-Process `
               -Name "sunshine" `
               -ErrorAction SilentlyContinue |
-              Stop-Process -Force -ErrorAction SilentlyContinue
+              Stop-Process `
+                -Force `
+                -ErrorAction SilentlyContinue
 
-            Write-Host "Sunshine process stopped if it was running."
+            Write-Host "Sunshine process stopped."
           }
 
           Start-Sleep -Seconds 3
 
       # ==========================================
-      # CONFIGURAÇÃO AUTOMÁTICA DO SUNSHINE
+      # CONFIGURAR SUNSHINE + CSRF
       # ==========================================
 
-      - name: Configure Sunshine Automatically
+      - name: Configure Sunshine
         shell: powershell
         run: |
           $configDir = "C:\Program Files\Sunshine\config"
-          $configFile = Join-Path $configDir "sunshine.conf"
+          $configFile = "$configDir\sunshine.conf"
 
           if (-not (Test-Path $configDir)) {
             New-Item `
@@ -319,7 +345,7 @@ jobs:
           $ip = $env:TAILSCALE_IP
 
           if ([string]::IsNullOrWhiteSpace($ip)) {
-            Write-Error "TAILSCALE_IP is empty."
+            Write-Error "Tailscale IP is empty."
             exit 1
           }
 
@@ -327,13 +353,16 @@ jobs:
 
           Write-Host ""
           Write-Host "======================================"
-          Write-Host "CONFIGURING SUNSHINE"
+          Write-Host "SUNSHINE CONFIGURATION"
           Write-Host "======================================"
 
-          Write-Host "Tailscale IP: $ip"
-          Write-Host "Allowed Origin: $origin"
+          Write-Host "Tailscale IP:"
+          Write-Host $ip
 
-          # Remove configurações anteriores destas opções
+          Write-Host ""
+          Write-Host "CSRF Origin:"
+          Write-Host $origin
+
           $content = Get-Content `
             -Path $configFile `
             -Raw `
@@ -352,14 +381,14 @@ jobs:
               $_ -notmatch '^\s*sunshine_name\s*='
             }
 
-          $newSettings = @(
+          $settings = @(
             "sunshine_name = Virtual Gaming PC"
             "origin_web_ui_allowed = wan"
             "csrf_allowed_origins = $origin"
           )
 
           $finalContent = (
-            ($filtered + $newSettings) -join "`r`n"
+            ($filtered + $settings) -join "`r`n"
           )
 
           Set-Content `
@@ -368,17 +397,16 @@ jobs:
             -Encoding UTF8
 
           Write-Host ""
-          Write-Host "Sunshine configuration written successfully."
+          Write-Host "Sunshine configuration saved."
 
           Write-Host ""
-          Write-Host "Checking configuration..."
-
+          Write-Host "Configuration:"
           Get-Content $configFile |
             Select-String `
               -Pattern "sunshine_name|origin_web_ui_allowed|csrf_allowed_origins"
 
       # ==========================================
-      # SENHA DO SUNSHINE
+      # GERAR SENHA SUNSHINE
       # ==========================================
 
       - name: Generate Sunshine Password
@@ -421,7 +449,12 @@ jobs:
 
           "SUNSHINE_PASSWORD=$sunshinePassword" >> $env:GITHUB_ENV
 
-          Write-Host "Sunshine password generated."
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "SUNSHINE PASSWORD"
+          Write-Host "======================================"
+          Write-Host $sunshinePassword
+          Write-Host "======================================"
 
       # ==========================================
       # CREDENCIAIS SUNSHINE
@@ -478,11 +511,11 @@ jobs:
           } else {
 
             Write-Host "Sunshine service not found."
-            Write-Host "Starting Sunshine directly..."
 
             Start-Process `
               -FilePath "C:\Program Files\Sunshine\sunshine.exe"
 
+            Write-Host "Sunshine started directly."
           }
 
           Start-Sleep -Seconds 10
@@ -627,7 +660,7 @@ jobs:
           }
 
       # ==========================================
-      # INFORMAÇÕES DE CONEXÃO
+      # MOSTRAR DADOS DE CONEXÃO
       # ==========================================
 
       - name: Connection Details
@@ -643,71 +676,80 @@ jobs:
           Write-Host "=============================================="
 
           Write-Host ""
-          Write-Host "Tailscale IP:"
+          Write-Host "TAILSCALE IP:"
           Write-Host $ip
 
           Write-Host ""
-          Write-Host "Moonlight Host:"
+          Write-Host "MOONLIGHT HOST:"
           Write-Host $ip
 
           Write-Host ""
-          Write-Host "Sunshine Web UI:"
+          Write-Host "SUNSHINE WEB UI:"
           Write-Host "https://$ip`:47990"
 
           Write-Host ""
-          Write-Host "Sunshine Username:"
+          Write-Host "SUNSHINE USERNAME:"
           Write-Host "PCGamer"
 
           Write-Host ""
-          Write-Host "Sunshine Password:"
+          Write-Host "SUNSHINE PASSWORD:"
           Write-Host $env:SUNSHINE_PASSWORD
 
           Write-Host ""
-          Write-Host "Windows Username:"
+          Write-Host "WINDOWS USERNAME:"
           Write-Host "PCGamer"
 
           Write-Host ""
-          Write-Host "Windows Password:"
+          Write-Host "WINDOWS PASSWORD:"
           Write-Host $env:PC_PASSWORD
+
+          Write-Host ""
+          Write-Host "WINDOWS ADMIN:"
+          Write-Host "YES"
 
           @"
           # 🎮 VIRTUAL GAMING PC
 
-          ## Status
+          ## STATUS
+
           ONLINE
 
-          ## Tailscale IP
+          ## TAILSCALE IP
 
           $ip
 
-          ## Moonlight Host
+          ## MOONLIGHT HOST
 
           $ip
 
-          ## Sunshine Web UI
+          ## SUNSHINE WEB UI
 
           https://$ip`:47990
 
-          ## Sunshine Login
+          ## SUNSHINE LOGIN
 
           Username: PCGamer
 
           Password: $env:SUNSHINE_PASSWORD
 
-          ## Windows RDP
-
-          Address: $ip`:3389
+          ## WINDOWS LOGIN
 
           Username: PCGamer
 
           Password: $env:PC_PASSWORD
+
+          Administrator: YES
+
+          ## RDP
+
+          Address: $ip`:3389
 
           "@ | Out-File `
             -FilePath $env:GITHUB_STEP_SUMMARY `
             -Append
 
       # ==========================================
-      # MANTER PC LIGADO
+      # MANTER O PC LIGADO
       # ==========================================
 
       - name: Keep PC Running
@@ -717,7 +759,6 @@ jobs:
           Write-Host "======================================"
           Write-Host "   VIRTUAL GAMING PC IS RUNNING"
           Write-Host "======================================"
-          Write-Host ""
 
           while ($true) {
 
